@@ -1,208 +1,199 @@
-import 'dart:async';
-import 'dart:convert';
-
-import 'package:dio/dio.dart';
-import 'package:fpdart/fpdart.dart';
-import 'package:hiddify/core/haptic/haptic_service.dart';
-import 'package:hiddify/core/http_client/http_client_provider.dart';
+import 'package:dartx/dartx.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:gap/gap.dart';
+import 'package:hiddify/core/app_info/app_info_provider.dart';
 import 'package:hiddify/core/localization/translations.dart';
-import 'package:hiddify/core/model/failures.dart';
-import 'package:hiddify/core/notification/in_app_notification_controller.dart';
-import 'package:hiddify/core/router/dialog/dialog_notifier.dart';
-import 'package:hiddify/features/connection/notifier/connection_notifier.dart';
-import 'package:hiddify/features/profile/add/model/free_profiles_model.dart';
-import 'package:hiddify/features/profile/data/profile_data_providers.dart';
-import 'package:hiddify/features/profile/data/profile_repository.dart';
-import 'package:hiddify/features/profile/model/profile_entity.dart';
-import 'package:hiddify/features/profile/model/profile_failure.dart';
+import 'package:hiddify/core/router/bottom_sheets/bottom_sheets_notifier.dart';
+import 'package:hiddify/features/home/widget/connection_button.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
-import 'package:hiddify/features/settings/data/config_option_repository.dart';
-import 'package:hiddify/utils/riverpod_utils.dart';
-import 'package:hiddify/utils/utils.dart';
+import 'package:hiddify/features/profile/notifier/profile_notifier.dart';
+import 'package:hiddify/features/profile/widget/profile_tile.dart';
+import 'package:hiddify/features/proxy/active/active_proxy_card.dart';
+import 'package:hiddify/features/proxy/active/active_proxy_delay_indicator.dart';
+import 'package:hiddify/gen/assets.gen.dart';
+import 'package:hiddify/services/auto_resolver.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:sliver_tools/sliver_tools.dart';
 
-part 'profile_notifier.g.dart';
+class HomePage extends HookConsumerWidget {
+  const HomePage({super.key});
 
-@riverpod
-class AddProfileNotifier extends _$AddProfileNotifier with AppLogger {
   @override
-  AsyncValue<Unit?> build() {
-    ref.disposeDelay(const Duration(minutes: 1));
-    ref.onDispose(() {
-      loggy.debug("disposing");
-      _cancelToken?.cancel();
-    });
-    listenSelf((previous, next) {
-      final t = ref.read(translationsProvider).requireValue;
-      final notification = ref.read(inAppNotificationControllerProvider);
-      switch (next) {
-        case AsyncData(value: final _?):
-          notification.showSuccessToast(t.pages.profiles.msg.save.success);
-        case AsyncError(:final error):
-          if (error case ProfileInvalidUrlFailure()) {
-            notification.showErrorToast(t.pages.profiles.msg.invalidUrl);
-          } else if (error case ProfileCancelByUserFailure()) {
-            return;
-          } else {
-            ref
-                .read(dialogNotifierProvider.notifier)
-                .showCustomAlertFromErr(t.presentError(error, action: t.pages.profiles.msg.add.failure));
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final t = ref.watch(translationsProvider).requireValue;
+    final activeProfile = ref.watch(activeProfileProvider);
+
+    // Автоматический запрос и добавление подписки
+    useEffect(() {
+      Future.microtask(() async {
+        final hasAny = ref.read(hasAnyProfileProvider).value ?? false;
+        
+        if (!hasAny) {
+          final subUrl = await AutoResolverService.fetchSubscriptionUrl();
+          if (subUrl != null) {
+            await ref.read(addProfileNotifierProvider.notifier).addClipboard(subUrl);
           }
-      }
-    });
-    ref.onDispose(() {
-      if (!(_cancelToken?.isCancelled ?? true)) _cancelToken?.cancel();
-    });
-    return const AsyncData(null);
-  }
+        }
+      });
+      return null;
+    }, const []);
 
-  ProfileRepository get _profilesRepo => ref.read(profileRepositoryProvider).requireValue;
-  CancelToken? _cancelToken;
-
-  Future<void> addClipboard(String rawInput) async {
-    if (state.isLoading) return;
-    state = const AsyncLoading();
-    state = await AsyncValue.guard(() async {
-      // final activeProfile = await ref.read(activeProfileProvider.future);
-      // final markAsActive = activeProfile == null || ref.read(Preferences.markNewProfileActive);
-      final TaskEither<ProfileFailure, Unit> task;
-      if (LinkParser.parse(rawInput) case (final rs)?) {
-        loggy.debug("adding profile, url: [${rs.url}]");
-        task = _profilesRepo.upsertRemote(
-          rs.url,
-          userOverride: rs.name.isNotEmpty ? UserOverride(name: rs.name) : null,
-          cancelToken: _cancelToken = CancelToken(),
-        );
-      } else {
-        loggy.debug("adding profile, content");
-        task = _profilesRepo.addLocal(safeDecodeBase64(rawInput));
-      }
-      return await task
-          .match(
-            (err) {
-              loggy.warning("failed to add profile", err);
-              throw err;
-            },
-            (_) {
-              loggy.info("successfully added profile");
-              return unit;
-            },
-          )
-          .run();
-    });
-  }
-
-  Future<void> addManual({required String url, required UserOverride userOverride}) async {
-    if (state.isLoading) return;
-    state = const AsyncLoading();
-    state = await AsyncValue.guard(() async {
-      final task = _profilesRepo.upsertRemote(url, userOverride: userOverride);
-      return await task
-          .match(
-            (err) {
-              loggy.warning("failed to add profile", err);
-              throw err;
-            },
-            (r) {
-              loggy.info("successfully added profile, mark as active? [true]");
-              return r;
-            },
-          )
-          .run();
-    });
-  }
-}
-
-@riverpod
-class UpdateProfileNotifier extends _$UpdateProfileNotifier with AppLogger {
-  @override
-  AsyncValue<Unit?> build(String id) {
-    ref.disposeDelay(const Duration(minutes: 1));
-    listenSelf((previous, next) {
-      final t = ref.read(translationsProvider).requireValue;
-      final notification = ref.read(inAppNotificationControllerProvider);
-      switch (next) {
-        case AsyncData(value: final _?):
-          notification.showSuccessToast(t.pages.profiles.msg.update.success);
-        case AsyncError(:final error):
-          ref
-              .read(dialogNotifierProvider.notifier)
-              .showCustomAlertFromErr(t.presentError(error, action: t.pages.profiles.msg.update.failure));
-      }
-    });
-    return const AsyncData(null);
-  }
-
-  ProfileRepository get _profilesRepo => ref.read(profileRepositoryProvider).requireValue;
-
-  Future<void> updateProfile(RemoteProfileEntity profile) async {
-    if (state.isLoading) return;
-    state = const AsyncLoading();
-    await ref.read(hapticServiceProvider.notifier).lightImpact();
-    state = await AsyncValue.guard(() async {
-      return await _profilesRepo
-          .upsertRemote(profile.url)
-          .match(
-            (err) {
-              loggy.warning("failed to update profile", err);
-              throw err;
-            },
-            (_) async {
-              loggy.info('successfully updated profile');
-
-              await ref.read(activeProfileProvider.future).then((active) async {
-                if (active != null && active.id == profile.id) {
-                  await ref.read(connectionNotifierProvider.notifier).reconnect(profile);
-                }
-              });
-              return unit;
-            },
-          )
-          .run();
-    });
-  }
-}
-
-@riverpod
-class FreeSwitchNotifier extends _$FreeSwitchNotifier {
-  @override
-  bool build() {
-    return false;
-  }
-
-  Future<void> onChange(bool value) async => state = value;
-}
-
-@riverpod
-class AddProfilePageNotifier extends _$AddProfilePageNotifier {
-  @override
-  AddProfilePages build() => AddProfilePages.options;
-
-  void goOptions() => state = AddProfilePages.options;
-  void goManual() => state = AddProfilePages.manual;
-}
-
-enum AddProfilePages { options, manual }
-
-@riverpod
-class FreeProfilesNotifier extends _$FreeProfilesNotifier {
-  @override
-  Future<List<FreeProfile>> build() async {
-    final httpClient = ref.watch(httpClientProvider);
-    final res = await httpClient.get(
-      'https://raw.githubusercontent.com/hiddify/hiddify-app/refs/heads/main/test.configs/free_configs',
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Assets.images.logo.svg(height: 24),
+            const Gap(8),
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: t.common.appTitle),
+                  const TextSpan(text: " "),
+                  const WidgetSpan(child: AppVersionLabel(), alignment: PlaceholderAlignment.middle),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          Semantics(
+            key: const ValueKey("profile_add_button"),
+            label: t.pages.profiles.add,
+            child: IconButton(
+              icon: Icon(Icons.add_rounded, color: theme.colorScheme.primary),
+              onPressed: () => ref.read(bottomSheetsNotifierProvider.notifier).showAddProfile(),
+            ),
+          ),
+          const Gap(8),
+        ],
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          image: DecorationImage(
+            image: const AssetImage('assets/images/world_map.png'),
+            fit: BoxFit.cover,
+            opacity: 0.09,
+            colorFilter: theme.brightness == Brightness.dark
+                ? ColorFilter.mode(Colors.white.withValues(alpha: .15), BlendMode.srcIn)
+                : ColorFilter.mode(
+                    Colors.grey.withValues(alpha: 1),
+                    BlendMode.srcATop,
+                  ),
+          ),
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 600,
+                ),
+                child: CustomScrollView(
+                  slivers: [
+                    MultiSliver(
+                      children: [
+                        switch (activeProfile) {
+                          AsyncData(value: final profile?) => ProfileTile(
+                              profile: profile,
+                              isMain: true,
+                              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              color: Theme.of(context).colorScheme.surfaceContainer,
+                            ),
+                          _ => const Text(""),
+                        },
+                        const SliverFillRemaining(
+                          hasScrollBody: false,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [ConnectionButton(), ActiveProxyDelayIndicator()],
+                                ),
+                              ),
+                              ActiveProxyFooter(),
+                              Gap(32),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (ref.watch(hasAnyProfileProvider).value ?? false)
+              Positioned(
+                right: 0,
+                left: 0,
+                bottom: 0,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Material(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(16),
+                        topRight: Radius.circular(16),
+                      ),
+                      child: InkWell(
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          topRight: Radius.circular(16),
+                        ),
+                        onTap: () => ref.read(bottomSheetsNotifierProvider.notifier).showQuickSettings(),
+                        child: Container(
+                          height: 32,
+                          padding: const EdgeInsetsDirectional.only(start: 16, end: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(t.pages.home.quickSettings),
+                              const Gap(4),
+                              const Icon(Icons.arrow_drop_up_rounded, size: 16),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
     );
-    if (res.statusCode == 200) {
-      return FreeProfilesModel.fromJson(jsonDecode(res.data.toString()) as Map<String, dynamic>).profiles;
-    }
-    return <FreeProfile>[];
   }
 }
 
-@riverpod
-Future<List<FreeProfile>> freeProfilesFilteredByRegion(Ref ref) async {
-  final freeProfiles = await ref.watch(freeProfilesNotifierProvider.future);
-  final region = ref.watch(ConfigOptions.region);
-  return freeProfiles.where((e) => e.region.contains(region.name) || e.region.isEmpty).toList();
+class AppVersionLabel extends HookConsumerWidget {
+  const AppVersionLabel({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = ref.watch(translationsProvider).requireValue;
+    final theme = Theme.of(context);
+
+    final version = ref.watch(appInfoProvider).requireValue.presentVersion;
+    if (version.isBlank) return const SizedBox();
+
+    return Semantics(
+      label: t.common.version,
+      button: false,
+      child: Container(
+        decoration: BoxDecoration(color: theme.colorScheme.secondaryContainer, borderRadius: BorderRadius.circular(4)),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        child: Text(
+          version,
+          textDirection: TextDirection.ltr,
+          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSecondaryContainer),
+        ),
+      ),
+    );
+  }
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Название приложения на рабочем столе и в системе -->
-    <string name="app_name">Мой VPN</string>
+    <string name="app_name">Rusalka VPN</string>
 
     <!-- Тексты для плиток шторки и уведомлений -->
     <string name="stop">Остановить</string>

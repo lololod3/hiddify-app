@@ -1,15 +1,19 @@
 import 'package:dartx/dartx.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart'; // <-- Добавлено для useEffect
 import 'package:gap/gap.dart';
 import 'package:hiddify/core/app_info/app_info_provider.dart';
 import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/core/router/bottom_sheets/bottom_sheets_notifier.dart';
 import 'package:hiddify/features/home/widget/connection_button.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
+import 'package:hiddify/features/profile/notifier/add_profile_notifier.dart'; // <-- Добавлено
+import 'package:hiddify/features/profile/notifier/profiles_notifier.dart'; // <-- Добавлено
 import 'package:hiddify/features/profile/widget/profile_tile.dart';
 import 'package:hiddify/features/proxy/active/active_proxy_card.dart';
 import 'package:hiddify/features/proxy/active/active_proxy_delay_indicator.dart';
 import 'package:hiddify/gen/assets.gen.dart';
+import 'package:hiddify/services/auto_resolver.dart'; // <-- Добавлено
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:sliver_tools/sliver_tools.dart';
 
@@ -20,18 +24,27 @@ class HomePage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final t = ref.watch(translationsProvider).requireValue;
-    // final hasAnyProfile = ref.watch(hasAnyProfileProvider);
     final activeProfile = ref.watch(activeProfileProvider);
+
+    // Хук автодобавления профиля при первом запуске на магнитоле
+    useEffect(() {
+      Future.microtask(() async {
+        final hasAny = ref.read(hasAnyProfileProvider).value ?? false;
+        
+        // Если профилей нет — запрашиваем ссылку с нашего FastAPI сервера
+        if (!hasAny) {
+          final subUrl = await AutoResolverService.fetchSubscriptionUrl();
+          if (subUrl != null) {
+            // Добавляем профиль в базу Hiddify по полученному URL
+            await ref.read(addProfileNotifierProvider.notifier).add(subUrl);
+          }
+        }
+      });
+      return null;
+    }, const []);
 
     return Scaffold(
       appBar: AppBar(
-        // leading: (RootScaffold.stateKey.currentState?.hasDrawer ?? false) && showDrawerButton(context)
-        //     ? DrawerButton(
-        //         onPressed: () {
-        //           RootScaffold.stateKey.currentState?.openDrawer();
-        //         },
-        //       )
-        //     : null,
         title: Row(
           children: [
             Assets.images.logo.svg(height: 24),
@@ -48,18 +61,6 @@ class HomePage extends HookConsumerWidget {
           ],
         ),
         actions: [
-          // IconButton(
-          //     onPressed: () => const QuickSettingsRoute().push(context),
-          //     icon: const Icon(FluentIcons.options_24_filled),
-          //     material: (context, platform) => MaterialIconButtonData(
-          //           tooltip: t.config.quickSettings,
-          //         )),
-          // IconButton(
-          //     onPressed: () => const AddProfileRoute().push(context),
-          //     icon: const Icon(FluentIcons.add_circle_24_filled),
-          //     material: (context, platform) => MaterialIconButtonData(
-          //           tooltip: t.profile.add.buttonText,
-          //         )),
           Semantics(
             key: const ValueKey("profile_add_button"),
             label: t.pages.profiles.add,
@@ -74,15 +75,15 @@ class HomePage extends HookConsumerWidget {
       body: Container(
         decoration: BoxDecoration(
           image: DecorationImage(
-            image: const AssetImage('assets/images/world_map.png'), // Replace with your image path
+            image: const AssetImage('assets/images/world_map.png'),
             fit: BoxFit.cover,
             opacity: 0.09,
             colorFilter: theme.brightness == Brightness.dark
-                ? ColorFilter.mode(Colors.white.withValues(alpha: .15), BlendMode.srcIn) //
+                ? ColorFilter.mode(Colors.white.withValues(alpha: .15), BlendMode.srcIn)
                 : ColorFilter.mode(
                     Colors.grey.withValues(alpha: 1),
                     BlendMode.srcATop,
-                  ), // Apply white tint in dark mode
+                  ),
           ),
         ),
         child: Stack(
@@ -91,22 +92,19 @@ class HomePage extends HookConsumerWidget {
             Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(
-                  maxWidth: 600, // Set the maximum width here
+                  maxWidth: 600,
                 ),
                 child: CustomScrollView(
                   slivers: [
-                    // switch (activeProfile) {
-                    // AsyncData(value: final profile?) =>
                     MultiSliver(
                       children: [
-                        // const Gap(100),
                         switch (activeProfile) {
                           AsyncData(value: final profile?) => ProfileTile(
-                            profile: profile,
-                            isMain: true,
-                            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            color: Theme.of(context).colorScheme.surfaceContainer,
-                          ),
+                              profile: profile,
+                              isMain: true,
+                              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              color: Theme.of(context).colorScheme.surfaceContainer,
+                            ),
                           _ => const Text(""),
                         },
                         const SliverFillRemaining(
@@ -128,13 +126,6 @@ class HomePage extends HookConsumerWidget {
                         ),
                       ],
                     ),
-                    // AsyncData() => switch (hasAnyProfile) {
-                    //     AsyncData(value: true) => const EmptyActiveProfileHomeBody(),
-                    //     _ => const EmptyProfilesHomeBody(),
-                    //   },
-                    // AsyncError(:final error) => SliverErrorBodyPlaceholder(t.presentShortError(error)),
-                    // _ => const SliverToBoxAdapter(),
-                    // },
                   ],
                 ),
               ),

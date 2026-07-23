@@ -1,19 +1,18 @@
 import 'package:dartx/dartx.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_hooks/flutter_hooks.dart'; // <-- Добавлено для useEffect
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:gap/gap.dart';
 import 'package:hiddify/core/app_info/app_info_provider.dart';
 import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/core/router/bottom_sheets/bottom_sheets_notifier.dart';
 import 'package:hiddify/features/home/widget/connection_button.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
-import 'package:hiddify/features/profile/notifier/add_profile_notifier.dart'; // <-- Добавлено
-import 'package:hiddify/features/profile/notifier/profiles_notifier.dart'; // <-- Добавлено
+import 'package:hiddify/features/profile/notifier/profile_notifier.dart'; // <-- Единый правильный файл
 import 'package:hiddify/features/profile/widget/profile_tile.dart';
 import 'package:hiddify/features/proxy/active/active_proxy_card.dart';
 import 'package:hiddify/features/proxy/active/active_proxy_delay_indicator.dart';
 import 'package:hiddify/gen/assets.gen.dart';
-import 'package:hiddify/services/auto_resolver.dart'; // <-- Добавлено
+import 'package:hiddify/services/auto_resolver.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:sliver_tools/sliver_tools.dart';
 
@@ -26,17 +25,15 @@ class HomePage extends HookConsumerWidget {
     final t = ref.watch(translationsProvider).requireValue;
     final activeProfile = ref.watch(activeProfileProvider);
 
-    // Хук автодобавления профиля при первом запуске на магнитоле
+    // Автоматический запрос и добавление подписки
     useEffect(() {
       Future.microtask(() async {
         final hasAny = ref.read(hasAnyProfileProvider).value ?? false;
         
-        // Если профилей нет — запрашиваем ссылку с нашего FastAPI сервера
         if (!hasAny) {
           final subUrl = await AutoResolverService.fetchSubscriptionUrl();
           if (subUrl != null) {
-            // Добавляем профиль в базу Hiddify по полученному URL
-            await ref.read(addProfileNotifierProvider.notifier).add(subUrl);
+            await ref.read(addProfileProvider.notifier).add(subUrl);
           }
         }
       });
